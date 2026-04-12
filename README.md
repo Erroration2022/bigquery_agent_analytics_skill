@@ -1,1 +1,1 @@
-#Skills for BigQuery Agent Analytics 
+# Skills for BigQuery Agent Analytics 
