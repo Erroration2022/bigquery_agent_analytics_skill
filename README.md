@@ -1,17 +1,8 @@
 # BigQuery Agent Analytics Skill
 
-A lightweight, LLM-discoverable skill for analyzing [Google ADK BigQuery Agent Analytics](https://adk.dev/integrations/bigquery-agent-analytics/) data. No server, no MCP — just a prompt skill file with pre-built CTEs, query templates, and an analysis methodology that any AI coding assistant can use.
+A lightweight, LLM-discoverable skill for analyzing [Google ADK BigQuery Agent Analytics](https://adk.dev/integrations/bigquery-agent-analytics/) data. Built to the [Agent Skills specification](https://agentskills.io/specification).
 
-## What This Does
-
-When loaded into an AI assistant (Claude Code, Cursor, AG, etc.), this skill teaches the LLM to:
-
-- Query the BQAA table correctly, using pre-built CTEs that handle deeply nested JSON/proto structures
-- Follow a structured analysis methodology: **Survey -> Filter -> Deep Dive**
-- **Cost-check every query** via dry-run before execution
-- Diagnose common failure patterns from known signal tables
-- Visualize results appropriately (Mermaid diagrams for delegation flows, sorted tables for comparisons)
-- Estimate costs, detect delegation loops, find HITL bottlenecks, and compare model performance
+No server, no MCP — just a prompt skill with pre-built CTEs, query templates, and a structured analysis methodology that any AI coding assistant can use.
 
 ## Quick Start
 
@@ -24,107 +15,70 @@ export BQ_TABLE="agent_events"          # optional, defaults to agent_events
 pip install google-cloud-bigquery
 ```
 
-The `run_bq.py` helper automatically injects `{PROJECT}`, `{DATASET}`, and `{TABLE}` placeholders in SQL from these environment variables. The LLM never needs to know your specific project or dataset name.
+### 2. Install in your AI assistant
 
-### 2. Compile the skill (optional, recommended)
+**Claude Code** — add to `CLAUDE.md` or copy to `.claude/skills/`:
+```
+For agent analytics, use the skill at: bigquery-agent-analytics-skill/SKILL.md
+```
 
+**Cursor** — reference in `.cursorrules`:
+```
+@bigquery-agent-analytics-skill/SKILL.md
+```
+
+**Clients without progressive disclosure** — compile first:
 ```bash
-python scripts/compile.py
+python bigquery-agent-analytics-skill/scripts/compile.py
 ```
+Then reference `bigquery-agent-analytics-skill/compiled_skill.md`.
 
-This produces a single `compiled_skill.md` that inlines all CTEs and queries, so the LLM gets full context in one file read without needing to `cat` individual SQL files.
-
-### 3. Install in your AI assistant
-
-**Claude Code:**
-Reference the compiled skill in your project's `CLAUDE.md`:
-```markdown
-For agent analytics, follow the skill at: path/to/agent-analytics-skill/compiled_skill.md
-```
-Or copy `compiled_skill.md` into `.claude/skills/`.
-
-**Cursor:**
-Reference in `.cursorrules` or project rules:
-```
-@agent-analytics-skill/compiled_skill.md
-```
-
-**Other agents:**
-Include `compiled_skill.md` as system/project context.
-
-### 4. Ask questions
+### 3. Ask questions
 
 ```
 "What's the error rate for my agents this week?"
 "Which tool has the highest failure rate?"
 "Compare latency across models for the last 30 days"
-"Show me the most expensive sessions"
-"Are there any agent delegation loops?"
 "Show me the delegation flow for trace abc123"
 ```
 
-## Repo Structure
+## Skill Structure
 
 ```
-agent-analytics-skill/
-├── skill.md                # The complete skill (schema, CTEs, methodology, patterns, examples)
-├── compiled_skill.md       # Auto-generated: skill.md + all SQL inlined (run compile.py)
-├── ctes/                   # Base CTEs — never write raw JSON extraction
-│   ├── base_llm_responses.sql
-│   ├── base_tool_calls.sql
-│   ├── base_errors.sql
-│   ├── base_sessions.sql
-│   └── base_agent_tree.sql
-├── queries/                # Ready-to-run analytics queries
-│   ├── trace_reconstruction.sql
-│   ├── latency_analysis.sql
-│   ├── token_usage_trends.sql
-│   ├── tool_failure_rates.sql
-│   ├── agent_delegation_map.sql
-│   ├── hitl_bottlenecks.sql
-│   ├── model_comparison.sql
-│   └── session_cost_estimate.sql
-├── scripts/
-│   ├── run_bq.py           # Query executor: auto-injects env vars, dry-run, billing limits
-│   └── compile.py          # Compiles skill.md + all SQL into a single file
-└── README.md
+bigquery-agent-analytics-skill/           # Skill directory (matches name field)
+├── SKILL.md                              # Core instructions (<100 lines)
+├── references/                           # Loaded on demand by the LLM
+│   ├── schema.md                         # Full table schema + nested paths
+│   ├── ctes.md                           # 5 mandatory base CTEs
+│   ├── queries.md                        # 8 ready-to-run analytics queries
+│   ├── failure-patterns.md               # 11 diagnostic signal/cause/action mappings
+│   └── examples.md                       # 3 complete prompt-to-execution walkthroughs
+├── assets/
+│   └── mermaid-template.md               # Mermaid diagram template for delegation flows
+└── scripts/
+    ├── run_bq.py                         # Query executor with dry-run + auto env injection
+    └── compile.py                        # Inlines everything into compiled_skill.md
 ```
 
-## How It Works
+## Progressive Disclosure
 
-```
-User asks question
-       |
-       v
-AI client loads compiled_skill.md as context
-       |
-       v
-LLM uses pre-built CTEs (never writes raw JSON extraction)
-       |
-       v
-LLM follows methodology: Survey -> Filter -> Deep Dive
-       |
-       v
-CRITICAL: Dry-run first (python scripts/run_bq.py --dry-run "SQL")
-       |
-       v
-If scan < 1GB: execute (python scripts/run_bq.py "SQL")
-If scan > 1GB: refine query, re-check
-       |
-       v
-run_bq.py auto-replaces {PROJECT}, {DATASET}, {TABLE} from env vars
-       |                                              |
-       v                                              v
-LLM interprets results using              Google BigQuery
-failure pattern table                     (actual execution)
-       |
-       v
-LLM renders output using visualization rules
-(Mermaid for delegation, sorted tables for comparisons)
-       |
-       v
-User gets formatted analysis + recommended next action
-```
+The skill is structured for efficient context usage per the [Agent Skills spec](https://agentskills.io/specification#progressive-disclosure):
+
+| Layer | What loads | Token cost |
+|-------|-----------|------------|
+| **Metadata** | `name` + `description` from frontmatter | ~100 tokens |
+| **Instructions** | Full `SKILL.md` body (gotchas, execution, methodology, output rules) | ~1,500 tokens |
+| **References** | Individual files from `references/` — only when needed | On demand |
+
+The LLM reads `SKILL.md` on activation and loads reference files only when it needs them (e.g., `references/ctes.md` when writing a query, `references/failure-patterns.md` when diagnosing results).
+
+## Cost Safety
+
+Every query goes through a mandatory dry-run before execution:
+
+1. `run_bq.py --dry-run` estimates bytes scanned via the BigQuery API without running the job
+2. `run_bq.py --max-gb` sets a hard billing limit (default 1 GB)
+3. `SKILL.md` instructs the LLM to refuse execution if the dry-run exceeds the limit
 
 ## Configuration
 
@@ -135,17 +89,7 @@ User gets formatted analysis + recommended next action
 | `BQ_TABLE` | Table name | No | `agent_events` |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account JSON (if not using ADC) | No | — |
 
-## Cost Safety
-
-Every query goes through a mandatory dry-run check before execution. The `run_bq.py` script:
-
-1. **`--dry-run`** — Queries the BigQuery API for `total_bytes_processed` without running the job
-2. **`--max-gb`** — Sets a hard billing limit (default: 1 GB). BigQuery rejects queries exceeding this
-3. The skill instructs the LLM to ALWAYS dry-run first and refuse to execute if the estimate exceeds the limit
-
-## Schema
-
-This skill targets the BQAA table created by the [ADK BigQuery Agent Analytics plugin](https://adk.dev/integrations/bigquery-agent-analytics/#schema-reference). The table name is configurable via `BQ_TABLE` (defaults to `agent_events`). See `skill.md` Section 2 for the full schema reference.
+`run_bq.py` auto-replaces `{PROJECT}`, `{DATASET}`, `{TABLE}` in SQL from these env vars. The LLM never needs to ask the user for their config.
 
 ## License
 
