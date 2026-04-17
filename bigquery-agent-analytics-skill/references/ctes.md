@@ -129,6 +129,11 @@ Use for: multi-agent delegation flows, detecting loops.
 
 **Reminder:** This CTE joins on BOTH `span_id` AND `trace_id`. Never omit `trace_id`.
 
+**Why `LEFT JOIN`:** the base CTE keeps root events (no parent span)
+so callers can reason about the full tree including entry points.
+When you only want true parent→child pairs (e.g. a delegation map),
+switch to `INNER JOIN` — see `queries.md → Agent Delegation Map`.
+
 ```sql
 WITH agent_tree AS (
   SELECT

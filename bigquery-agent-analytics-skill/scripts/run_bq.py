@@ -1,21 +1,37 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.9"
+# dependencies = [
+#     "google-cloud-bigquery>=3.11",
+# ]
+# ///
 """Lightweight BigQuery executor for agent analytics queries.
 
 Usage:
-    python scripts/run_bq.py "SELECT ..."
-    python scripts/run_bq.py --dry-run "SELECT ..."
+    python scripts/run_bq.py --start 2026-04-01 --end 2026-04-15 "SELECT ..."
+    python scripts/run_bq.py --dry-run --start ... --end ... "SELECT ..."
+    python scripts/run_bq.py --trace-id abc123 --start ... --end ... "SELECT ..."
     python scripts/run_bq.py --max-gb 5 "SELECT ..."
 
 Features:
 - Auto-injects {PROJECT}, {DATASET}, {TABLE} from environment variables
   so the LLM never needs to know the user's specific project/dataset/table.
+- Binds BigQuery query parameters @start, @end, @trace_id from
+  --start / --end / --trace-id flags. @start/@end accept ISO-8601
+  timestamps or dates (YYYY-MM-DD treated as UTC midnight).
 - --dry-run mode estimates bytes scanned WITHOUT executing the query.
 - --max-gb sets the billing safety limit (default 1 GB).
+
+Invocation path: this script is designed to be invoked from the skill
+root directory (e.g. `python scripts/run_bq.py ...`). If invoked from a
+different working directory, pass the full path to the script; the
+script does not read any files relative to the CWD.
 """
 import sys
 import json
 import os
 import argparse
+from datetime import datetime, timezone
 
 from google.cloud import bigquery
 
@@ -29,6 +45,21 @@ def inject_placeholders(sql: str, project: str, dataset: str, table: str) -> str
     )
 
 
+def parse_ts(value: str) -> datetime:
+    """Parse an ISO-8601 timestamp or YYYY-MM-DD date as UTC."""
+    # Accept plain dates as UTC midnight
+    try:
+        if len(value) == 10 and value[4] == "-" and value[7] == "-":
+            return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        # fromisoformat handles "2026-04-15T12:00:00" and "...+00:00"
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"Invalid timestamp '{value}': {e}")
+
+
 def format_bytes(n: int) -> str:
     """Human-readable byte size."""
     for unit in ("B", "KB", "MB", "GB", "TB"):
@@ -38,12 +69,29 @@ def format_bytes(n: int) -> str:
     return f"{n:.2f} PB"
 
 
+def build_query_parameters(args):
+    """Build BigQuery ScalarQueryParameter list from CLI args."""
+    params = []
+    if args.start is not None:
+        params.append(bigquery.ScalarQueryParameter("start", "TIMESTAMP", args.start))
+    if args.end is not None:
+        params.append(bigquery.ScalarQueryParameter("end", "TIMESTAMP", args.end))
+    if args.trace_id is not None:
+        params.append(bigquery.ScalarQueryParameter("trace_id", "STRING", args.trace_id))
+    return params
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run a BigQuery query with safety limits")
     parser.add_argument("query", help="SQL query string")
     parser.add_argument("--project", default=os.environ.get("GCP_PROJECT_ID", ""), help="GCP project ID")
     parser.add_argument("--dataset", default=os.environ.get("BQ_DATASET", ""), help="BigQuery dataset")
     parser.add_argument("--table", default=os.environ.get("BQ_TABLE", "agent_events"), help="Table name (default: agent_events)")
+    parser.add_argument("--start", type=parse_ts, default=None,
+                        help="Bind @start parameter (ISO-8601 timestamp or YYYY-MM-DD date, UTC)")
+    parser.add_argument("--end", type=parse_ts, default=None,
+                        help="Bind @end parameter (ISO-8601 timestamp or YYYY-MM-DD date, UTC)")
+    parser.add_argument("--trace-id", default=None, help="Bind @trace_id parameter (string)")
     parser.add_argument("--max-gb", type=int, default=1, help="Max bytes billed in GB (default: 1)")
     parser.add_argument("--dry-run", action="store_true", help="Estimate bytes scanned without executing")
     args = parser.parse_args()
@@ -55,17 +103,17 @@ def main():
         print("ERROR: Set BQ_DATASET env var or pass --dataset", file=sys.stderr)
         sys.exit(1)
 
-    # Auto-inject placeholders from env/args
     sql = inject_placeholders(args.query, args.project, args.dataset, args.table)
+    query_parameters = build_query_parameters(args)
 
     client = bigquery.Client(project=args.project)
 
     if args.dry_run:
-        # Dry run: estimate bytes scanned without executing
         job_config = bigquery.QueryJobConfig(
             dry_run=True,
             use_query_cache=False,
             use_legacy_sql=False,
+            query_parameters=query_parameters,
         )
         try:
             job = client.query(sql, job_config=job_config)
@@ -81,10 +129,10 @@ def main():
             print(f"ERROR (dry-run): {e}", file=sys.stderr)
             sys.exit(1)
     else:
-        # Actual execution with billing limit
         job_config = bigquery.QueryJobConfig(
             maximum_bytes_billed=args.max_gb * (1 << 30),
             use_legacy_sql=False,
+            query_parameters=query_parameters,
         )
         try:
             result = client.query(sql, job_config=job_config).result()

@@ -26,6 +26,11 @@ WHERE timestamp BETWEEN @start AND @end
 
 ## Trace Reconstruction
 
+**Partition safety:** `trace_id` alone is not enough — without a
+`timestamp` predicate the query scans every partition in the table.
+Always pass an `@start`/`@end` window that brackets when the trace
+ran (a ±1 day window around the incident is usually enough).
+
 ```sql
 SELECT
   timestamp, event_type, agent, invocation_id, span_id, parent_span_id,
@@ -36,6 +41,7 @@ SELECT
   status, error_message
 FROM `{PROJECT}.{DATASET}.{TABLE}`
 WHERE trace_id = @trace_id
+  AND timestamp BETWEEN @start AND @end
 ORDER BY timestamp ASC
 ```
 
@@ -128,6 +134,12 @@ ORDER BY failures DESC
 
 ## Agent Delegation Map
 
+Uses `INNER JOIN` (not `LEFT JOIN` like the base `agent_tree` CTE):
+we only care about pairs where a parent span actually exists, so
+dropping unparented root events is desirable here. Use `LEFT JOIN`
+(as in `references/ctes.md`) when you also need to see top-level
+events with no parent.
+
 ```sql
 WITH agent_tree AS (
   SELECT
@@ -139,6 +151,7 @@ WITH agent_tree AS (
     ON  a.parent_span_id = b.span_id
     AND a.trace_id       = b.trace_id
   WHERE a.timestamp BETWEEN @start AND @end
+    AND b.timestamp BETWEEN @start AND @end
     AND a.agent IS NOT NULL
     AND b.agent IS NOT NULL
     AND a.agent != b.agent
@@ -173,7 +186,9 @@ hitl_completions AS (
     timestamp AS completion_time
   FROM `{PROJECT}.{DATASET}.{TABLE}`
   WHERE event_type IN (
-    'HITL_CREDENTIAL_REQUEST_COMPLETED', 'HITL_INPUT_REQUEST_COMPLETED'
+    'HITL_CREDENTIAL_REQUEST_COMPLETED',
+    'HITL_CONFIRMATION_REQUEST_COMPLETED',
+    'HITL_INPUT_REQUEST_COMPLETED'
   )
   AND timestamp BETWEEN @start AND @end
 )
@@ -228,7 +243,16 @@ ORDER BY avg_latency_ms DESC
 
 ---
 
-## Session Cost Estimate
+## Session Token Usage (for cost estimation)
+
+Outputs raw prompt/completion token counts grouped by `session_id` and
+`model_id`. **Cost projection is intentionally left to the caller** —
+per-token prices vary by model, region, context-length tier, and
+contract, so embedding a fixed rate here produces misleading numbers
+in multi-model environments.
+
+To estimate cost, multiply the token columns by the current published
+prices for each `model_id` (e.g. from your vendor's pricing page).
 
 ```sql
 WITH llm_responses AS (
@@ -240,25 +264,15 @@ WITH llm_responses AS (
   FROM `{PROJECT}.{DATASET}.{TABLE}`
   WHERE event_type = 'LLM_RESPONSE'
     AND timestamp BETWEEN @start AND @end
-),
-session_tokens AS (
-  SELECT
-    session_id, model_id,
-    COUNT(*)                    AS llm_calls,
-    SUM(prompt_tokens)          AS total_prompt_tokens,
-    SUM(completion_tokens)      AS total_completion_tokens
-  FROM llm_responses
-  GROUP BY session_id, model_id
 )
 SELECT
-  session_id, model_id, llm_calls,
-  total_prompt_tokens, total_completion_tokens,
-  ROUND(total_prompt_tokens     / 1000000.0 * 3.0, 4)  AS est_prompt_cost_usd,
-  ROUND(total_completion_tokens / 1000000.0 * 15.0, 4)  AS est_completion_cost_usd,
-  ROUND(
-    (total_prompt_tokens / 1000000.0 * 3.0)
-    + (total_completion_tokens / 1000000.0 * 15.0), 4
-  ) AS est_total_cost_usd
-FROM session_tokens
-ORDER BY est_total_cost_usd DESC
+  session_id,
+  model_id,
+  COUNT(*)                    AS llm_calls,
+  SUM(prompt_tokens)          AS total_prompt_tokens,
+  SUM(completion_tokens)      AS total_completion_tokens,
+  SUM(prompt_tokens) + SUM(completion_tokens) AS total_tokens
+FROM llm_responses
+GROUP BY session_id, model_id
+ORDER BY total_tokens DESC
 ```

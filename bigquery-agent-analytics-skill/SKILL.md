@@ -1,15 +1,16 @@
 ---
 name: bigquery-agent-analytics-skill
 description: >
-  Analyze BigQuery Agent Analytics (BQAA) data — error rates, latency, token
-  usage, tool failures, agent delegation flows, HITL bottlenecks, and session
-  costs. Use when the user asks about agent performance, debugging, or cost
-  analysis from a BQAA agent_events table.
+  Analyze BigQuery Agent Analytics (BQAA) data — error rates, latency
+  analysis, token usage trends, tool failure rates, agent delegation flows,
+  HITL bottlenecks, model comparison, and session token usage for cost
+  estimation. Use when the user asks about agent performance, debugging,
+  cost analysis, or observability from a BQAA agent_events table.
 license: MIT
-compatibility: Requires Python 3.8+ and google-cloud-bigquery package
+compatibility: Requires Python 3.9+ and google-cloud-bigquery package
 metadata:
   author: Erroration2022
-  version: "2.0"
+  version: "2.1"
 allowed-tools: Bash(python:*)
 ---
 
@@ -22,24 +23,44 @@ allowed-tools: Bash(python:*)
 - `parent_span_id` self-joins **must match on both `span_id` AND `trace_id`**.
   Omitting `trace_id` produces cross-trace garbage joins.
 - The table is partitioned on `timestamp`. Forgetting a `WHERE timestamp`
-  filter can scan terabytes. Always include a date range.
+  filter can scan terabytes. Always include a date range — even when
+  filtering on `trace_id`, also bracket the trace with `@start`/`@end`.
 - `is_truncated = true` means the content was cut off — check
   `content_parts[].object_ref.uri` for the full payload in GCS.
 
 ## Execution
 
 ALWAYS execute queries via the helper script. It auto-injects `{PROJECT}`,
-`{DATASET}`, and `{TABLE}` from environment variables — never ask the user
-for their project or dataset name.
+`{DATASET}`, and `{TABLE}` from environment variables (`GCP_PROJECT_ID`,
+`BQ_DATASET`, `BQ_TABLE`) — never ask the user for their project or
+dataset name.
+
+**Working directory:** invoke the script by its path relative to the skill
+root (shown below as `scripts/run_bq.py`). If the agent's current working
+directory is not the skill root, substitute the absolute path to the
+script — it has no runtime dependency on CWD.
+
+Query parameters `@start`, `@end`, and `@trace_id` are bound via CLI flags
+(not string substitution) so BigQuery's parameterized-query safety holds:
 
 ```bash
-python scripts/run_bq.py "SELECT ... FROM \`{PROJECT}.{DATASET}.{TABLE}\` WHERE ..."
+python scripts/run_bq.py \
+  --start 2026-04-01 --end 2026-04-15 \
+  "SELECT ... FROM \`{PROJECT}.{DATASET}.{TABLE}\` WHERE timestamp BETWEEN @start AND @end"
+```
+
+For trace reconstruction, also pass `--trace-id` (and still keep a time
+window so partition pruning kicks in):
+
+```bash
+python scripts/run_bq.py --start 2026-04-10 --end 2026-04-11 \
+  --trace-id abc123... "SELECT ... WHERE trace_id = @trace_id AND timestamp BETWEEN @start AND @end"
 ```
 
 **CRITICAL — dry-run every query before executing:**
 
 ```bash
-python scripts/run_bq.py --dry-run "YOUR SQL"
+python scripts/run_bq.py --dry-run --start ... --end ... "YOUR SQL"
 ```
 
 - [ ] Run dry-run
@@ -48,7 +69,13 @@ python scripts/run_bq.py --dry-run "YOUR SQL"
 
 ## Methodology
 
-Follow this checklist in strict order. Present findings at each step.
+For investigations driven by a reported issue ("errors are up", "this
+session was slow"), follow Survey → Filter → Deep Dive → Diagnose in
+order. For exploratory or comparative questions (model comparison,
+delegation visualization, token-trend rollups) skip straight to the
+matching ready-made query in [references/queries.md](references/queries.md).
+
+Default flow when an issue is implied:
 
 - [ ] **Step 1 — Survey:** Count total events, errors, error rate, unique agents,
   and p95 latency in the time window. Present as a one-line summary. If no issues,
@@ -63,6 +90,11 @@ Follow this checklist in strict order. Present findings at each step.
 - [ ] **Diagnose:** Read [references/failure-patterns.md](references/failure-patterns.md)
   and map results to a known pattern. State: "This matches pattern: [X].
   Recommended next step: [Y]."
+
+For non-investigative requests (e.g. "compare models this month", "show
+delegation for trace X", "token usage trend this week"), run the
+matching query directly and present in the format dictated under
+**Output** — no mandatory Survey/Filter/Deep Dive.
 
 ## CTE Rule
 
@@ -79,7 +111,10 @@ CTE unless the question is specifically about tools or delegation.
 - **Delegation queries** — render as Mermaid `sequenceDiagram`
   (see [assets/mermaid-template.md](assets/mermaid-template.md))
 - **Model comparison** — markdown table sorted by `avg_latency_ms` descending
-- Always end with the matched failure pattern + recommended next action
+- **Session token usage** — markdown table sorted by `total_tokens` descending;
+  note that cost projections require applying current per-model prices
+- When diagnosing an investigation, end with the matched failure pattern
+  + recommended next action
 
 ## References (load on demand)
 

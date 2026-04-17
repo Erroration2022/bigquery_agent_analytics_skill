@@ -27,8 +27,14 @@ Single event-sourced table: `{PROJECT}.{DATASET}.{TABLE}`
 
 `LLM_REQUEST`, `LLM_RESPONSE`, `TOOL_STARTING`, `TOOL_COMPLETED`,
 `HITL_CREDENTIAL_REQUEST`, `HITL_CREDENTIAL_REQUEST_COMPLETED`,
-`HITL_CONFIRMATION_REQUEST`, `HITL_INPUT_REQUEST`,
-`HITL_INPUT_REQUEST_COMPLETED`, `STATE_DELTA`
+`HITL_CONFIRMATION_REQUEST`, `HITL_CONFIRMATION_REQUEST_COMPLETED`,
+`HITL_INPUT_REQUEST`, `HITL_INPUT_REQUEST_COMPLETED`, `STATE_DELTA`
+
+Every `HITL_*_REQUEST` has a matching `HITL_*_REQUEST_COMPLETED`
+event when the user responds. Analyses that count unanswered
+requests must join on all three completion types — omitting
+`HITL_CONFIRMATION_REQUEST_COMPLETED` will misreport every
+confirmation as never-completed.
 
 ## Content field by event_type
 

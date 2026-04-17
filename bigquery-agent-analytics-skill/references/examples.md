@@ -2,15 +2,17 @@
 
 ## Example 1: "What's the error rate for my agents this week?"
 
-**Dry-run:**
+**Dry-run** (bind `@start`/`@end` via flags, not string interpolation):
 ```bash
-python scripts/run_bq.py --dry-run "SELECT COUNT(*) AS total_events, COUNTIF(status = 'ERROR') AS errors, ROUND(COUNTIF(status = 'ERROR') / COUNT(*) * 100, 2) AS error_rate_pct, COUNT(DISTINCT session_id) AS sessions, COUNT(DISTINCT agent) AS agents FROM \`{PROJECT}.{DATASET}.{TABLE}\` WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)"
+python scripts/run_bq.py --dry-run \
+  --start 2026-04-09 --end 2026-04-16 \
+  "SELECT COUNT(*) AS total_events, COUNTIF(status = 'ERROR') AS errors, ROUND(COUNTIF(status = 'ERROR') / COUNT(*) * 100, 2) AS error_rate_pct, COUNT(DISTINCT session_id) AS sessions, COUNT(DISTINCT agent) AS agents FROM \`{PROJECT}.{DATASET}.{TABLE}\` WHERE timestamp BETWEEN @start AND @end"
 ```
 Output: `{"dry_run": true, "total_bytes_processed": 312475648, "human_readable": "298.00 MB", "exceeds_limit": false}`
 
-**Execute survey** (under limit):
+**Execute survey** (under limit, same flags):
 ```bash
-python scripts/run_bq.py "..."
+python scripts/run_bq.py --start 2026-04-09 --end 2026-04-16 "..."
 ```
 Output: `{"total_events": 7234, "errors": 231, "error_rate_pct": 3.19, "sessions": 45, "agents": 12}`
 
@@ -48,7 +50,9 @@ Output: `{"total_events": 7234, "errors": 231, "error_rate_pct": 3.19, "sessions
 
 ## Example 3: "Show me agent delegation flows for trace abc123"
 
-**Dry-run** the agent_tree query scoped to `trace_id = 'abc123'`, then execute.
+**Dry-run** the agent_tree query scoped to `trace_id = 'abc123'` (pass
+`--trace-id abc123` and an `--start`/`--end` window that brackets the
+trace, so partition pruning still applies), then execute.
 
 **Render as Mermaid sequenceDiagram** (output rule for delegation):
 
