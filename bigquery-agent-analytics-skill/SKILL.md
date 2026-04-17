@@ -11,7 +11,7 @@ compatibility: Requires Python 3.9+ and google-cloud-bigquery package
 metadata:
   author: Erroration2022
   version: "2.1"
-allowed-tools: Bash(python:*)
+allowed-tools: Bash(python scripts/run_bq.py:*)
 ---
 
 ## Gotchas
@@ -29,6 +29,11 @@ allowed-tools: Bash(python:*)
   `content_parts[].object_ref.uri` for the full payload in GCS.
 
 ## Execution
+
+`scripts/run_bq.py` is the **only** script to invoke during analysis.
+`scripts/compile.py` is a build-time helper that inlines all references
+into a single file for clients without progressive disclosure — never
+run it as part of a user-facing analysis task.
 
 ALWAYS execute queries via the helper script. It auto-injects `{PROJECT}`,
 `{DATASET}`, and `{TABLE}` from environment variables (`GCP_PROJECT_ID`,
