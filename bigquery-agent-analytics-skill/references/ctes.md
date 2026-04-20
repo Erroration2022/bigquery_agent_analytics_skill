@@ -149,6 +149,7 @@ WITH agent_tree AS (
   LEFT JOIN `{PROJECT}.{DATASET}.{TABLE}` b
     ON  a.parent_span_id = b.span_id
     AND a.trace_id       = b.trace_id
+    AND b.timestamp BETWEEN @start AND @end
   WHERE a.timestamp BETWEEN @start AND @end
 )
 ```

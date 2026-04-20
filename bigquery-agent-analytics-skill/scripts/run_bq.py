@@ -18,7 +18,9 @@ Features:
   so the LLM never needs to know the user's specific project/dataset/table.
 - Binds BigQuery query parameters @start, @end, @trace_id from
   --start / --end / --trace-id flags. @start/@end accept ISO-8601
-  timestamps or dates (YYYY-MM-DD treated as UTC midnight).
+  timestamps or dates. Bare YYYY-MM-DD dates are UTC midnight for
+  --start and end-of-day (23:59:59.999999Z) for --end so the named
+  day is fully inclusive under BETWEEN @start AND @end.
 - --dry-run mode estimates bytes scanned WITHOUT executing the query.
 - --max-gb sets the billing safety limit (default 1 GB).
 
@@ -31,7 +33,7 @@ import sys
 import json
 import os
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from google.cloud import bigquery
 
@@ -45,12 +47,21 @@ def inject_placeholders(sql: str, project: str, dataset: str, table: str) -> str
     )
 
 
-def parse_ts(value: str) -> datetime:
-    """Parse an ISO-8601 timestamp or YYYY-MM-DD date as UTC."""
-    # Accept plain dates as UTC midnight
+def parse_ts(value: str, is_end: bool = False) -> datetime:
+    """Parse an ISO-8601 timestamp or YYYY-MM-DD date as UTC.
+
+    When ``is_end`` is True and ``value`` is a bare YYYY-MM-DD date, the
+    returned timestamp is the last microsecond of that day (23:59:59.999999
+    UTC) so ``--end 2026-04-15`` includes all events on April 15 under a
+    ``BETWEEN @start AND @end`` filter. ISO-8601 inputs with explicit time
+    components are unaffected.
+    """
     try:
         if len(value) == 10 and value[4] == "-" and value[7] == "-":
-            return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            day = datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            if is_end:
+                return day + timedelta(days=1) - timedelta(microseconds=1)
+            return day
         # fromisoformat handles "2026-04-15T12:00:00" and "...+00:00"
         dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
         if dt.tzinfo is None:
@@ -58,6 +69,11 @@ def parse_ts(value: str) -> datetime:
         return dt
     except ValueError as e:
         raise argparse.ArgumentTypeError(f"Invalid timestamp '{value}': {e}")
+
+
+def parse_end_ts(value: str) -> datetime:
+    """argparse adapter: parse ``--end`` with end-of-day semantics for bare dates."""
+    return parse_ts(value, is_end=True)
 
 
 def format_bytes(n: int) -> str:
@@ -89,8 +105,9 @@ def main():
     parser.add_argument("--table", default=os.environ.get("BQ_TABLE", "agent_events"), help="Table name (default: agent_events)")
     parser.add_argument("--start", type=parse_ts, default=None,
                         help="Bind @start parameter (ISO-8601 timestamp or YYYY-MM-DD date, UTC)")
-    parser.add_argument("--end", type=parse_ts, default=None,
-                        help="Bind @end parameter (ISO-8601 timestamp or YYYY-MM-DD date, UTC)")
+    parser.add_argument("--end", type=parse_end_ts, default=None,
+                        help="Bind @end parameter (ISO-8601 timestamp or YYYY-MM-DD date, UTC; "
+                             "bare dates are treated as end-of-day 23:59:59.999999Z)")
     parser.add_argument("--trace-id", default=None, help="Bind @trace_id parameter (string)")
     parser.add_argument("--max-gb", type=int, default=1, help="Max bytes billed in GB (default: 1)")
     parser.add_argument("--dry-run", action="store_true", help="Estimate bytes scanned without executing")

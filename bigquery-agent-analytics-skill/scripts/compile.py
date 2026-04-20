@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.9"
+# dependencies = []
+# ///
 """Compile SKILL.md + all reference files into a single self-contained file.
 
 Usage:
